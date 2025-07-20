@@ -3,6 +3,11 @@ Following schemes are implemented
 1. Lax Wendroff scheme for Linear advection 
 2. Second order MUSCL scheme with, ssprk22 time discretization for Linear advection and Burgers equation
 
+Recent Updates
+1. Added MUSCL-Hancock scheme for Linear advection
+2. Generalized constant linear advection with arbitrary (a,b) direction
+
+
 Convergence test for order of accuracy works for 
 1. LW scheme ---> Linear advection ( including variable advection)
 2. MUSCL scheme---> Linear advection ( including variable advection) and Burgers equation

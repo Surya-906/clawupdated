@@ -1,25 +1,26 @@
 import numpy as np
-
-# (f, g) = (a*u, a*u) with a = 1
+#generalized version
+a=1
+b=1
 def xflux(x, y, u):
-    return u
+    return a*u
 
 def yflux(x, y, u):
-    return u
+    return b*u
 
 def advection_velocity(x,y):
-    return (1,1)
+    return (a,b)
 
 # Upwind flux
 def xnumflux(x, y, Fl, Fr, ul, ur):
-    return ul
+    return Fl if a>0 else Fr
 
 def ynumflux(x, y, Fl, Fr, ul, ur):
-    return ul
+    return Fl if b>0 else Fr
 
 # Return (1,1) at all points (x,y)
 def local_speed(x, y, u):
-    return (np.ones(x.shape), np.ones(x.shape))
+    return (a*np.ones(x.shape), b*np.ones(x.shape))
 
 def max_speed(x, y, u):
-    return (1.0, 1.0)
+    return (abs(a), abs(b))

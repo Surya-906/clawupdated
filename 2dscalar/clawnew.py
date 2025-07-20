@@ -15,7 +15,7 @@ import sys
 parser = argparse.ArgumentParser()
 parser.add_argument('-pde', choices=('linear', 'varadv', 'burger', 'bucklev'),
                     help='PDE', default='linear')
-parser.add_argument('-scheme', choices=('lw','rk2','fo' ), help='lw',
+parser.add_argument('-scheme', choices=('lw','rk2','fo','hancock' ), help='lw',
                     default='fo')
 parser.add_argument('-corr', choices=('radau', 'g2'), help='Correction function',
                     default='radau')
@@ -27,7 +27,7 @@ parser.add_argument('-plot_freq', type=int, help='Frequency to plot solution',
                     default=1)
 parser.add_argument('-ic', choices=('sin2pi', 'expo','hat', 'solid'),
                     help='Initial condition', default='sin2pi')
-parser.add_argument('-limit', choices=('no', 'mmod'), help='Apply limiter',
+parser.add_argument('-limit', choices=('no', 'mmod','mc'), help='Apply limiter',
                     default='no')
 parser.add_argument('-tvbM', type=float, help='TVB M parameter', default=0.0)
 parser.add_argument('-compute_error', choices=('no', 'yes'),
@@ -62,9 +62,9 @@ else:
 
 # Select cfl
 cfl = args.cfl
-beta = 1.0 # parameter in minmod
-if args.scheme == 'rk2':
-    args.limit = 'mmod'
+#beta = 1.0 # parameter in minmod
+# if args.scheme == 'rk2':
+#     args.limit = 'mmod'
 nx = args.ncellx       # number of cells in the x-direction
 ny = args.ncelly       # number of cells in the y-direction
 global fileid
@@ -75,6 +75,7 @@ dy = (ymax - ymin)/ny
 v = np.zeros((nx+4, ny+4))  # 2 ghost cells each side
 vres = np.zeros((nx+4, ny+4))  # 2 ghost cells each sideresidual
 # To store the cell averages only in real cells.
+
 # Set initial condition by interpolation
 for i in range(nx+4):
     for j in range(ny+4):
@@ -82,14 +83,14 @@ for i in range(nx+4):
         y = ymin + (j-2)*dy + 0.5 * dy 
         val = initial_condition(x, y)
         v[i, j] = val
-# copy the initial condition
-# index 2 to nx+1 and 2 to ny+1
-v0 = v[2:nx+2, 2:ny+2].copy()
+
 # it stores the coordinates of real cell centre
 xgrid1 = np.linspace(xmin+0.5*dx, xmax-0.5*dx, nx)
 ygrid1 = np.linspace(ymin+0.5*dy, ymax-0.5*dy, ny)
 ygrid, xgrid = np.meshgrid(ygrid1, xgrid1)
-
+# copy the initial condition
+# index 2 to nx+1 and 2 to ny+1
+v0 = v[2:nx+2, 2:ny+2].copy()
 # it stores the coordinates of vertices of the real cells
 Xgrid = np.linspace(xmin, xmax, nx+1)
 Ygrid = np.linspace(ymin, ymax, ny+1)
@@ -138,18 +139,34 @@ def minmod(a,b,c):
         return sa * np.abs([a,b,c]).min()
     else:
         return 0.0
+def mc_limiter(a, b, c):
+    return minmod(2*a, 2*b, c)
+
+#newfunction
+def compute_slope(conjm1, conj, conjp1):
+    if args.limit == 'mmod':
+        beta = 1
+        return minmod(
+            beta * (conj - conjm1),
+            0.5 * (conjp1 - conjm1),
+            beta * (conjp1 - conj)
+        )
+    elif args.limit == 'mc':
+        beta = 2
+        return mc_limiter(
+            beta * (conj - conjm1),
+            beta * (conjp1 - conj),
+            0.5 * (conjp1 - conjm1)
+        )
+    elif args.limit == 'no':
+        return 0.0  # No slope -> no reconstruction
+    else:
+        print("Limiter type not defined")
+        exit()
 
 def reconstruct(conjm1, conj, conjp1):
-    if args.limit == 'no':
-        return conj
-    elif args.limit == 'mmod':
-        conl = conj + 0.5 * minmod( beta*(conj-conjm1), \
-                                0.5*(conjp1-conjm1), \
-                                beta*(conjp1-conj) )
-        return conl
-    else:
-        print('limit type not define')
-        exit()
+    slope = compute_slope(conjm1, conj, conjp1)
+    return conj + 0.5 * slope
 # Initialize plot
 def lwflux(u,v,dx,dy,dt,ql,qr,qdl,qdr,qul,qur):
     qt = - u * (qr - ql)/dx - v * (qul - qdl + qur - qdr)/(4.0*dy)
@@ -289,17 +306,37 @@ def compute_residual_lxw(t, dt, lam_x, lam_y, v, res):
                           + 0.25 * lam_x * lam_y * (v[i+1,j+1] - v[i+1,j-1] - v[i-1,j+1] + v[i-1,j-1] ) \
                           + 0.5 * lam_y**2 * ( v[i,j-1] - 2.0*v[i,j] + v[i,j+1])
     return -vres
-# Compute residual of fv  scheme
-def compute_residual(t,lam_x, lam_y, v, vres):
+# Compute residual of fv  scheme with Hancock scheme included
+def compute_residual(t,lam_x, lam_y, v, vres,predictor=False):
     vres[:,:] = 0.0
+    
+    # Step 1: If MUSCL-Hancock, compute v_pred
+    if predictor:
+        dt = lamx * dx  # lamx = dt / dx -- recover dt
+        v_pred = np.zeros_like(v)
+        for i in range(2, nx+2):
+            for j in range(2, ny+2):
+                slope_x = compute_slope(v[i-1,j], v[i,j], v[i+1,j])
+                slope_y = compute_slope(v[i,j-1], v[i,j], v[i,j+1])
+
+                x = xmin + (i - 2 + 0.5) * dx
+                y = ymin + (j - 2 + 0.5) * dy
+                cx, cy = advection_velocity(x, y)
+
+                v_pred[i,j] = v[i,j] - 0.5 * dt * (cx * slope_x / dx + cy * slope_y / dy)
+
+        update_ghost(v_pred)  # ghost cells of predicted values
+
+    else:
+        v_pred = v  # no predictor step, use original values
     # compute the inter-cell fluxes
-    # loop over interior  vertical faces
+    # loop over interior  vertical faces    
     for i in range(1, nx+2):  # face between (i,j) and (i+1,j)
         xf = (xmin + (i-1)*dx)  # x location of this face
         for j in range(2, ny+2):
             y = ymin + (j-2)*dy+ 0.5*dy # cetre of vertical face
-            vl = reconstruct(v[i-1, j], v[i, j], v[i+1, j])
-            vr = reconstruct(v[i+2, j], v[i+1, j], v[i, j])
+            vl = reconstruct(v_pred[i-1, j], v_pred[i, j], v_pred[i+1, j])
+            vr = reconstruct(v_pred[i+2, j], v_pred[i+1, j], v_pred[i, j])
             Fl, Fr = xflux(xf, y, vl), xflux(xf, y, vr)
             Fn = xnumflux(xf, y, Fl, Fr, vl, vr)
             vres[i, j] += lamx*Fn
@@ -309,13 +346,14 @@ def compute_residual(t,lam_x, lam_y, v, vres):
         yf = (ymin + (j-1)*dy)
         for i in range(2, nx+2):
             x = xmin + (i-2)*dx + 0.5 * dx
-            vl = reconstruct(v[i,j-1], v[i,j], v[i,j+1])
-            vr = reconstruct(v[i,j+2], v[i,j+1],v[i,j])
+            vl = reconstruct(v_pred[i,j-1], v_pred[i,j], v_pred[i,j+1])
+            vr = reconstruct(v_pred[i,j+2], v_pred[i,j+1],v_pred[i,j])
             Gl, Gr = yflux(x,yf, vl), yflux(x,yf, vr)
             Gn = ynumflux(x, yf, Gl, Gr, vl, vr)
             vres[i, j] += lamy*Gn
             vres[i,j+1] -= lamy*Gn
     return vres
+
 
 if (args.pde == 'linear' or args.pde == 'varadv'):
     # Find dt once since cfl does not depend on u or time
@@ -323,8 +361,9 @@ if (args.pde == 'linear' or args.pde == 'varadv'):
     #  |sigma_x| + |sigma_y| = cfl
     if ( args.scheme == 'lw'):
         dt = 0.72/(np.abs(sx)/dx + np.abs(sy)/dy + 1.0e-14).max()
-    elif (args.scheme == 'fo' or args.scheme == 'rk2'):
-        dt = cfl/(np.abs(sx)/dx + np.abs(sy)/dy + 1.0e-14).max()
+    elif args.scheme == 'fo' or args.scheme == 'rk2' or args.scheme == 'hancock':
+        dt = cfl / (np.abs(sx)/dx + np.abs(sy)/dy + 1.0e-14).max()
+
 
 it, t = 0, 0.0
 Tf = args.Tf
@@ -349,6 +388,11 @@ while t < Tf:
         update_ghost(v)
         vres = compute_residual(t,lamx, lamy, v, vres)
         v = v - vres
+    elif args.scheme == 'hancock':
+        update_ghost(v)
+        vres = compute_residual(t, lamx, lamy, v, vres, predictor=True)
+        v = v - vres
+
         
     t, it = t+dt, it+1
     if args.save_freq > 0:
