@@ -15,7 +15,7 @@ import sys
 parser = argparse.ArgumentParser()
 parser.add_argument('-pde', choices=('linear', 'varadv', 'burger', 'bucklev'),
                     help='PDE', default='linear')
-parser.add_argument('-scheme', choices=('lw','rk2','fo','hancock' ), help='lw',
+parser.add_argument('-scheme', choices=('lw','rk2','fo','mh' ), help='lw',
                     default='fo')
 parser.add_argument('-corr', choices=('radau', 'g2'), help='Correction function',
                     default='radau')
@@ -258,13 +258,13 @@ def apply_ssprk22 ( t, dt, lam_x, lam_y, v_old, v, vres):
     #first stage
     ts  = t
     update_ghost(v)
-    vres = compute_residual(ts, lam_x, lam_y, v, vres)
+    vres = compute_residual(ts, lam_x, lam_y, v, vres,scheme=args.scheme)
     v = v - vres
 
     #second stage
     ts = t + dt
     update_ghost(v)
-    vres = compute_residual(ts, lam_x, lam_y, v, vres)
+    vres = compute_residual(ts, lam_x, lam_y, v, vres,scheme=args.scheme)
     v = 0.5 * v_old + 0.5 * (v - vres)
     
     return v
@@ -307,36 +307,28 @@ def compute_residual_lxw(t, dt, lam_x, lam_y, v, res):
                           + 0.5 * lam_y**2 * ( v[i,j-1] - 2.0*v[i,j] + v[i,j+1])
     return -vres
 # Compute residual of fv  scheme with Hancock scheme included
-def compute_residual(t,lam_x, lam_y, v, vres,predictor=False):
+def compute_residual(t,lam_x, lam_y, v, vres,scheme):
     vres[:,:] = 0.0
     
-    # Step 1: If MUSCL-Hancock, compute v_pred
-    if predictor:
-        dt = lamx * dx  # lamx = dt / dx -- recover dt
-        v_pred = np.zeros_like(v)
-        for i in range(2, nx+2):
-            for j in range(2, ny+2):
-                slope_x = compute_slope(v[i-1,j], v[i,j], v[i+1,j])
-                slope_y = compute_slope(v[i,j-1], v[i,j], v[i,j+1])
-
-                x = xmin + (i - 2 + 0.5) * dx
-                y = ymin + (j - 2 + 0.5) * dy
-                cx, cy = advection_velocity(x, y)
-
-                v_pred[i,j] = v[i,j] - 0.5 * dt * (cx * slope_x / dx + cy * slope_y / dy)
-
-        update_ghost(v_pred)  # ghost cells of predicted values
-
-    else:
-        v_pred = v  # no predictor step, use original values
-    # compute the inter-cell fluxes
     # loop over interior  vertical faces    
     for i in range(1, nx+2):  # face between (i,j) and (i+1,j)
         xf = (xmin + (i-1)*dx)  # x location of this face
         for j in range(2, ny+2):
             y = ymin + (j-2)*dy+ 0.5*dy # cetre of vertical face
-            vl = reconstruct(v_pred[i-1, j], v_pred[i, j], v_pred[i+1, j])
-            vr = reconstruct(v_pred[i+2, j], v_pred[i+1, j], v_pred[i, j])
+            vl = reconstruct(v[i-1, j], v[i, j], v[i+1, j])
+            vr = reconstruct(v[i+2, j], v[i+1, j], v[i, j])
+            if scheme=='mh':
+                cx, cy = advection_velocity(xf, y)
+
+                # Predictor for vl (from cell i)
+                slope_x_l = compute_slope(v[i-1, j], v[i, j], v[i+1, j])
+                slope_y_l = compute_slope(v[i, j-1], v[i, j], v[i, j+1])
+                vl -= 0.5 * dt * (cx * slope_x_l / dx + cy * slope_y_l / dy)
+
+                # Predictor for vr (from cell i+1)
+                slope_x_r = compute_slope(v[i, j], v[i+1, j], v[i+2, j])
+                slope_y_r = compute_slope(v[i+1, j-1], v[i+1, j], v[i+1, j+1])
+                        
             Fl, Fr = xflux(xf, y, vl), xflux(xf, y, vr)
             Fn = xnumflux(xf, y, Fl, Fr, vl, vr)
             vres[i, j] += lamx*Fn
@@ -346,8 +338,22 @@ def compute_residual(t,lam_x, lam_y, v, vres,predictor=False):
         yf = (ymin + (j-1)*dy)
         for i in range(2, nx+2):
             x = xmin + (i-2)*dx + 0.5 * dx
-            vl = reconstruct(v_pred[i,j-1], v_pred[i,j], v_pred[i,j+1])
-            vr = reconstruct(v_pred[i,j+2], v_pred[i,j+1],v_pred[i,j])
+            vl = reconstruct(v[i,j-1], v[i,j], v[i,j+1])
+            vr = reconstruct(v[i,j+2], v[i,j+1],v[i,j])
+            
+            if scheme=='mh':
+
+                cx, cy = advection_velocity(x, yf)
+                # Predictor correction for vl (from cell j)
+                slope_x_l = compute_slope(v[i-1, j], v[i, j], v[i+1, j])
+                slope_y_l = compute_slope(v[i, j-1], v[i, j], v[i, j+1])
+                vl -= 0.5 * dt * (cx * slope_x_l / dx + cy * slope_y_l / dy)
+
+                # Predictor correction for vr (from cell j+1)
+                slope_x_r = compute_slope(v[i-1, j+1], v[i, j+1], v[i+1, j+1])
+                slope_y_r = compute_slope(v[i, j], v[i, j+1], v[i, j+2])
+                vr -= 0.5 * dt * (cx * slope_x_r / dx + cy * slope_y_r / dy)
+
             Gl, Gr = yflux(x,yf, vl), yflux(x,yf, vr)
             Gn = ynumflux(x, yf, Gl, Gr, vl, vr)
             vres[i, j] += lamy*Gn
@@ -361,7 +367,7 @@ if (args.pde == 'linear' or args.pde == 'varadv'):
     #  |sigma_x| + |sigma_y| = cfl
     if ( args.scheme == 'lw'):
         dt = 0.72/(np.abs(sx)/dx + np.abs(sy)/dy + 1.0e-14).max()
-    elif args.scheme == 'fo' or args.scheme == 'rk2' or args.scheme == 'hancock':
+    elif args.scheme == 'fo' or args.scheme == 'rk2' or args.scheme == 'mh':
         dt = cfl / (np.abs(sx)/dx + np.abs(sy)/dy + 1.0e-14).max()
 
 
@@ -386,11 +392,11 @@ while t < Tf:
         v = apply_ssprk22 ( t, dt, lamx, lamy, v_old, v, vres)
     elif args.scheme == 'fo':
         update_ghost(v)
-        vres = compute_residual(t,lamx, lamy, v, vres)
+        vres = compute_residual(t,lamx, lamy, v, vres,scheme=args.scheme)
         v = v - vres
-    elif args.scheme == 'hancock':
+    elif args.scheme == 'mh':
         update_ghost(v)
-        vres = compute_residual(t, lamx, lamy, v, vres, predictor=True)
+        vres = compute_residual(t, lamx, lamy, v, vres, scheme=args.scheme)
         v = v - vres
 
         
