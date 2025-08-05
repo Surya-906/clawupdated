@@ -328,6 +328,8 @@ def compute_residual(t,lam_x, lam_y, v, vres,scheme):
                 # Predictor for vr (from cell i+1)
                 slope_x_r = compute_slope(v[i, j], v[i+1, j], v[i+2, j])
                 slope_y_r = compute_slope(v[i+1, j-1], v[i+1, j], v[i+1, j+1])
+                vr -= 0.5 * dt * (cx * slope_x_r / dx + cy * slope_y_r / dy)
+
                         
             Fl, Fr = xflux(xf, y, vl), xflux(xf, y, vr)
             Fn = xnumflux(xf, y, Fl, Fr, vl, vr)
