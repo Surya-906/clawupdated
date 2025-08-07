@@ -22,7 +22,7 @@ parser.add_argument('-corr', choices=('radau', 'g2'), help='Correction function'
 parser.add_argument('-ncellx', type=int, help='Number of x cells', default=50)
 parser.add_argument('-ncelly', type=int, help='Number of y cells', default=50)
 parser.add_argument('-cfl', type=float, help='CFL number', default=1.0)
-parser.add_argument('-Tf', type=float, help='Final time', default=1.0)
+parser.add_argument('-Tf', type=float, help='Final time', default=1.0)#default time
 parser.add_argument('-plot_freq', type=int, help='Frequency to plot solution',
                     default=1)
 parser.add_argument('-ic', choices=('sin2pi', 'expo','hat', 'solid'),
@@ -73,16 +73,23 @@ dx = (xmax - xmin)/nx
 dy = (ymax - ymin)/ny
 # Allocate solution variables
 v = np.zeros((nx+4, ny+4))  # 2 ghost cells each side
+vexact = np.zeros((nx+4, ny+4)) # exact solution
 vres = np.zeros((nx+4, ny+4))  # 2 ghost cells each sideresidual
 # To store the cell averages only in real cells.
-
+t=args.Tf
 # Set initial condition by interpolation
 for i in range(nx+4):
     for j in range(ny+4):
         x = xmin + (i-2)*dx+0.5 * dx     
         y = ymin + (j-2)*dy + 0.5 * dy 
+        xrot = x * np.cos(t) + y * np.sin(t)
+        yrot = -x * np.sin(t) + y * np.cos(t)
         val = initial_condition(x, y)
+        val1 = 1+np.exp(-50*((xrot-0.5)**2+yrot**2))
+        # val1= np.sin(np.pi*xrot) * np.sin(np.pi*yrot)
         v[i, j] = val
+        vexact[i, j] = val1
+        
 
 # it stores the coordinates of real cell centre
 xgrid1 = np.linspace(xmin+0.5*dx, xmax-0.5*dx, nx)
@@ -91,6 +98,7 @@ ygrid, xgrid = np.meshgrid(ygrid1, xgrid1)
 # copy the initial condition
 # index 2 to nx+1 and 2 to ny+1
 v0 = v[2:nx+2, 2:ny+2].copy()
+ve=vexact[2:nx+2, 2:ny+2].copy()
 # it stores the coordinates of vertices of the real cells
 Xgrid = np.linspace(xmin, xmax, nx+1)
 Ygrid = np.linspace(ymin, ymax, ny+1)
@@ -328,6 +336,7 @@ def compute_residual(t,lam_x, lam_y, v, vres,scheme):
                 # Predictor for vr (from cell i+1)
                 slope_x_r = compute_slope(v[i, j], v[i+1, j], v[i+2, j])
                 slope_y_r = compute_slope(v[i+1, j-1], v[i+1, j], v[i+1, j+1])
+                vr -= 0.5 * dt * (cx * slope_x_r / dx + cy * slope_y_r / dy)
                         
             Fl, Fr = xflux(xf, y, vl), xflux(xf, y, vr)
             Fn = xnumflux(xf, y, Fl, Fr, vl, vr)
@@ -411,9 +420,9 @@ while t < Tf:
 
 # Compute error norm: initial condition is exact solution
 if args.compute_error == 'yes':
-    l1_err = np.sum(np.abs(v[2:nx+2,2:ny+2]-v0)) / (nx*ny)
-    l2_err = np.sqrt(np.sum((v[2:nx+2,2:ny+2]-v0)**2) / (nx*ny))
-    li_err = np.abs(v[2:nx+2,2:ny+2]-v0).max()
+    l1_err = np.sum(np.abs(v[2:nx+2,2:ny+2]-ve)) / (nx*ny)
+    l2_err = np.sqrt(np.sum((v[2:nx+2,2:ny+2]-ve)**2) / (nx*ny))
+    li_err = np.abs(v[2:nx+2,2:ny+2]-ve).max()
     print('dx,dy,l1,l2,linf error =')# %10.4e %10.4e %10.4e %10.4e %10.4e' % 
     print(dx,dy,l1_err,l2_err,li_err)
 # print final data
