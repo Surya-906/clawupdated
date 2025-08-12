@@ -22,7 +22,7 @@ parser.add_argument('-corr', choices=('radau', 'g2'), help='Correction function'
 parser.add_argument('-ncellx', type=int, help='Number of x cells', default=50)
 parser.add_argument('-ncelly', type=int, help='Number of y cells', default=50)
 parser.add_argument('-cfl', type=float, help='CFL number', default=1.0)
-parser.add_argument('-Tf', type=float, help='Final time', default=1.0)#default time
+parser.add_argument('-Tf', type=float, help='Final time', default=1.0)
 parser.add_argument('-plot_freq', type=int, help='Frequency to plot solution',
                     default=1)
 parser.add_argument('-ic', choices=('sin2pi', 'expo','hat', 'solid'),
@@ -43,6 +43,7 @@ elif args.pde == 'varadv':
     from varadv import *
 elif args.pde == 'burger':
     from burger import *
+    from burgerexact import *
 else:
     print('PDE not implemented')
     exit()
@@ -78,18 +79,28 @@ vres = np.zeros((nx+4, ny+4))  # 2 ghost cells each sideresidual
 # To store the cell averages only in real cells.
 t=args.Tf
 # Set initial condition by interpolation
-for i in range(nx+4):
-    for j in range(ny+4):
-        x = xmin + (i-2)*dx+0.5 * dx     
-        y = ymin + (j-2)*dy + 0.5 * dy 
-        xrot = x * np.cos(t) + y * np.sin(t)
-        yrot = -x * np.sin(t) + y * np.cos(t)
-        val = initial_condition(x, y)
-        val1 = 1+np.exp(-50*((xrot-0.5)**2+yrot**2))
-        # val1= np.sin(np.pi*xrot) * np.sin(np.pi*yrot)
-        v[i, j] = val
-        vexact[i, j] = val1
-        
+if args.pde== "burger":
+    # Build 1D arrays of cell-center coordinates
+    x_coords = xmin + (np.arange(nx+4) - 2 + 0.5) * dx
+    y_coords = ymin + (np.arange(ny+4) - 2 + 0.5) * dy
+    # Create meshgrid of coordinates
+    X, Y = np.meshgrid(x_coords, y_coords, indexing="ij")
+    # Initial condition values
+    v = initial_condition(X, Y)
+    # Exact Burgers solution at time t
+    vexact = uexact(x_coords, y_coords, t, initial_condition)
+else:
+    for i in range(nx+4):
+        for j in range(ny+4):
+            x = xmin + (i-2)*dx+0.5 * dx     
+            y = ymin + (j-2)*dy + 0.5 * dy 
+            val = initial_condition(x, y)
+            # xrot = x * np.cos(t) + y * np.sin(t)
+            # yrot = -x * np.sin(t) + y * np.cos(t)
+            # val1 = 1+np.exp(-50*((xrot-0.5)**2+yrot**2))
+            # val1= np.sin(np.pi*xrot) * np.sin(np.pi*yrot)
+            v[i, j] = val
+            # vexact[i, j] = val1
 
 # it stores the coordinates of real cell centre
 xgrid1 = np.linspace(xmin+0.5*dx, xmax-0.5*dx, nx)
@@ -227,7 +238,7 @@ def update_plot(fig, t, u1):
     ax2.set_ylabel('y')
     plt.colorbar(cp)
     ax3 = fig.add_subplot(122)
-    line1,line2 = ax3.plot(xgrid1, np.diag(v0),'ro-', xgrid1, np.diag(u1),'b')
+    line1,line2 = ax3.plot(xgrid1, np.diag(v0),'ro-', xgrid1, np.diag(u1),'b') #v0 chnaged to ve for burger
     plt.legend(('exact','approx'))
     ax3.set_xlabel('x')
     ax3.set_ylabel('v')
@@ -235,7 +246,10 @@ def update_plot(fig, t, u1):
     plt.grid(True);
     plt.draw()
     plt.pause(0.1)
-    plt.clf()
+    if t < Tf:   # only clear if not at final time
+        plt.clf()
+    
+    
 # Fill ghost cells using periodicity
 def update_ghost(v1):
     # left ghost cell
@@ -326,7 +340,12 @@ def compute_residual(t,lam_x, lam_y, v, vres,scheme):
             vl = reconstruct(v[i-1, j], v[i, j], v[i+1, j])
             vr = reconstruct(v[i+2, j], v[i+1, j], v[i, j])
             if scheme=='mh':
-                cx, cy = advection_velocity(xf, y)
+                if args.pde == "burger":
+                    va=0.5*(vl+vr)
+                    cx=va
+                    cy=va
+                else :
+                    cx, cy = advection_velocity(xf, y)
 
                 # Predictor for vl (from cell i)
                 slope_x_l = compute_slope(v[i-1, j], v[i, j], v[i+1, j])
@@ -351,8 +370,14 @@ def compute_residual(t,lam_x, lam_y, v, vres,scheme):
             vr = reconstruct(v[i,j+2], v[i,j+1],v[i,j])
             
             if scheme=='mh':
+                if args.pde == "burger":
+                    va=0.5*(vl+vr)
+                    cx=va
+                    cy=va
+                else :
+                    cx, cy = advection_velocity(xf, y)
 
-                cx, cy = advection_velocity(x, yf)
+                # cx, cy = advection_velocity(x, yf)
                 # Predictor correction for vl (from cell j)
                 slope_x_l = compute_slope(v[i-1, j], v[i, j], v[i+1, j])
                 slope_y_l = compute_slope(v[i, j-1], v[i, j], v[i, j+1])
@@ -419,6 +444,7 @@ while t < Tf:
             update_plot(fig, t, v[2:nx+2,2:ny+2])
 
 # Compute error norm: initial condition is exact solution
+#v0 for comapring with ic and ve for comparing with exact solution at tf
 if args.compute_error == 'yes':
     l1_err = np.sum(np.abs(v[2:nx+2,2:ny+2]-ve)) / (nx*ny)
     l2_err = np.sqrt(np.sum((v[2:nx+2,2:ny+2]-ve)**2) / (nx*ny))
@@ -433,6 +459,7 @@ if args.save_freq > 0:
 
 
 if args.plot_freq > 0: 
+    # plt.savefig("final_solution.png", dpi=300, bbox_inches='tight')
     plt.show()
 
 # Things to do
